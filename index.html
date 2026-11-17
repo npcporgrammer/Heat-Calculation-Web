@@ -71,7 +71,11 @@
     <main class="main">
       <div class="planner-layout">
         <section class="planner-main">
-          <section class="panel overview-panel" aria-label="本周营养概览">
+          <section class="panel overview-panel" aria-label="当日营养概览">
+            <div class="overview-daybar">
+              <span>当日</span>
+              <strong id="overviewDayLabel">周二 · 11月17日</strong>
+            </div>
             <div class="overview-top">
               <div class="macro-visual">
                 <div class="macro-donut" id="macroDonut">
@@ -82,7 +86,7 @@
                     <circle class="donut-seg donut-carbs" id="donutCarbs" cx="100" cy="100" r="72"></circle>
                   </svg>
                   <div class="donut-center">
-                    <span>本周</span>
+                    <span id="donutPeriodLabel">当日</span>
                     <strong id="donutKcal">0</strong>
                     <small>千卡</small>
                   </div>
@@ -107,14 +111,14 @@
                   <small id="weekBalanceNote">记录后计算</small>
                 </div>
                 <div class="overview-stat">
-                  <span>记录天数</span>
-                  <strong id="weekLogged">0/7</strong>
-                  <small>天</small>
+                  <span>食物条目</span>
+                  <strong id="dayEntries">0</strong>
+                  <small>条</small>
                 </div>
               </div>
             </div>
 
-            <div class="macro-bars" id="macroBars" aria-label="三大营养素横向占比"></div>
+            <div class="macro-bars" id="macroBars" aria-label="当日三大营养素横向占比"></div>
           </section>
 
           <section class="panel week-panel" aria-label="本周饮食表">
@@ -446,6 +450,21 @@
         </div>
       </footer>
     </form>
+  </dialog>
+
+  <dialog class="confirm-dialog" id="confirmDialog" aria-labelledby="confirmTitle">
+    <div class="confirm-card">
+      <button type="button" class="dialog-close" id="confirmClose" aria-label="关闭">
+        <svg class="icon"><use href="#i-close"></use></svg>
+      </button>
+      <span class="confirm-mark" aria-hidden="true">!</span>
+      <h2 id="confirmTitle">确认删除</h2>
+      <p id="confirmMessage"></p>
+      <div class="confirm-actions">
+        <button type="button" class="secondary-button" id="confirmCancel">取消</button>
+        <button type="button" class="danger-button" id="confirmOk">删除</button>
+      </div>
+    </div>
   </dialog>
 
   <div class="toast" id="toast" role="status" aria-live="polite">

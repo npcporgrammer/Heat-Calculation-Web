@@ -85,6 +85,7 @@
   let storageWarningShown = false;
   let dragState = null;
   let toastTimer = null;
+  let confirmResolver = null;
 
   const el = {};
 
@@ -124,8 +125,8 @@
     const ids = [
       "profileButton", "userAvatar", "userName", "prevWeek", "nextWeek", "weekDisplay", "weekRange",
       "datePicker", "todayWeekBtn", "shareWeekBtn", "macroDonut", "donutProtein", "donutFat", "donutCarbs",
-      "donutKcal", "macroLegend", "macroBars", "weekIntake", "weekTdee", "weekBalance", "weekBalanceNote", "weekBalanceCard",
-      "weekLogged", "tableWeekRange", "addStatusBtn", "clearStatusBtn", "dayColumns", "weekTotals", "trayCount",
+      "donutKcal", "donutPeriodLabel", "macroLegend", "macroBars", "overviewDayLabel", "weekIntake", "weekTdee", "weekBalance", "weekBalanceNote", "weekBalanceCard",
+      "dayEntries", "tableWeekRange", "addStatusBtn", "clearStatusBtn", "dayColumns", "weekTotals", "trayCount",
       "addTrayBtn", "trayList", "compareChart", "compareStats", "profileDialog", "closeProfile", "drawerUserName",
       "drawerScroll", "userList", "newUserBtn", "currentWeightLabel", "profileForm", "ageInput", "heightInput",
       "bodyFatInput", "formulaSelect", "proteinMinInput", "fatMinInput", "profileBmr", "profileTdee", "profileBmi", "weightForm", "weightDate",
@@ -138,7 +139,8 @@
       "energySuffix", "energyConverted", "foodProtein", "foodFat", "foodCarbs", "foodServingSize",
       "servingSizeLabel", "servingSizeSuffix", "foodServings", "formServingStepper", "amountReadout", "previewKcal", "previewKj",
       "previewAmount", "previewProtein", "previewFat", "previewCarbs", "previewFormula", "deleteFoodCard",
-      "foodError", "cancelFoodDialog", "saveFoodCard", "toast", "toastText",
+      "foodError", "cancelFoodDialog", "saveFoodCard", "confirmDialog", "confirmClose", "confirmTitle",
+      "confirmMessage", "confirmCancel", "confirmOk", "toast", "toastText",
     ];
     ids.forEach(function (id) { el[id] = document.getElementById(id); });
   }
@@ -198,10 +200,24 @@
     el.foodForm.addEventListener("submit", handleFoodSubmit);
     el.closeFoodDialog.addEventListener("click", closeFoodDialog);
     el.cancelFoodDialog.addEventListener("click", closeFoodDialog);
-    el.foodDialog.addEventListener("click", function (event) {
-      if (event.target === el.foodDialog) closeFoodDialog();
+    el.foodDialog.addEventListener("cancel", function (event) {
+      event.preventDefault();
     });
     el.foodDialog.addEventListener("close", syncBodyDialogState);
+    el.confirmOk.addEventListener("click", function () { settleConfirm(true); });
+    el.confirmCancel.addEventListener("click", function () { settleConfirm(false); });
+    el.confirmClose.addEventListener("click", function () { settleConfirm(false); });
+    el.confirmDialog.addEventListener("cancel", function (event) {
+      event.preventDefault();
+      settleConfirm(false);
+    });
+    el.confirmDialog.addEventListener("click", function (event) {
+      if (event.target === el.confirmDialog) settleConfirm(false);
+    });
+    el.confirmDialog.addEventListener("close", function () {
+      if (confirmResolver) settleConfirm(false);
+      syncBodyDialogState();
+    });
     el.presetStrip.addEventListener("click", handlePresetClick);
     el.basisSegment.addEventListener("click", handleBasisClick);
     el.unitSegment.addEventListener("click", handleUnitClick);
@@ -906,9 +922,10 @@
   }
 
   function renderOverview() {
-    const days = getWeekSummaries(parseDateKey(viewDate));
-    const stats = summarizeDays(days);
-    const totals = stats.totals;
+    const day = calculateDay(viewDate);
+    const totals = day.totals;
+    const weekday = WEEKDAY_LONG[(day.date.getDay() + 6) % 7];
+    const isToday = day.dateKey === todayKey();
     const proteinCal = totals.protein * 4;
     const fatCal = totals.fat * 9;
     const carbsCal = totals.carbs * 4;
@@ -917,18 +934,20 @@
     const fPct = macroCal > 0 ? fatCal / macroCal : 0;
     const cPct = macroCal > 0 ? carbsCal / macroCal : 0;
 
+    el.overviewDayLabel.textContent = weekday + " · " + formatShortDate(viewDate);
+    el.donutPeriodLabel.textContent = isToday ? "今日" : weekday;
     el.weekIntake.textContent = fmtInt(totals.kcal);
-    el.weekTdee.textContent = stats.count ? fmtInt(totals.tdee) : "—";
-    el.weekLogged.textContent = stats.count + "/7";
+    el.weekTdee.textContent = day.tdee !== null ? fmtInt(day.tdee) : "—";
+    el.dayEntries.textContent = day.entries.length;
     el.donutKcal.textContent = fmtInt(totals.kcal);
 
     el.weekBalanceCard.classList.remove("is-deficit", "is-surplus", "is-even");
-    if (stats.balance === null) {
+    if (day.balance === null) {
       el.weekBalance.textContent = "—";
       el.weekBalanceNote.textContent = "记录后计算";
     } else {
-      const rounded = Math.round(stats.balance);
-      el.weekBalance.textContent = fmtSigned(stats.balance);
+      const rounded = Math.round(day.balance);
+      el.weekBalance.textContent = fmtSigned(day.balance);
       el.weekBalanceNote.textContent = "千卡 · " + (rounded < 0 ? "缺口" : rounded > 0 ? "盈余" : "持平");
       el.weekBalanceCard.classList.add(rounded < 0 ? "is-deficit" : rounded > 0 ? "is-surplus" : "is-even");
     }
@@ -939,7 +958,7 @@
     el.donutFat.style.strokeDashoffset = String(-pPct * DONUT_CIRCUMFERENCE);
     el.donutCarbs.style.strokeDasharray = (cPct * DONUT_CIRCUMFERENCE) + " " + DONUT_CIRCUMFERENCE;
     el.donutCarbs.style.strokeDashoffset = String(-(pPct + fPct) * DONUT_CIRCUMFERENCE);
-    el.macroDonut.setAttribute("aria-label", "本周蛋白质 " + fmtPercent(pPct * 100) + "，脂肪 " + fmtPercent(fPct * 100) + "，碳水 " + fmtPercent(cPct * 100));
+    el.macroDonut.setAttribute("aria-label", "当日蛋白质 " + fmtPercent(pPct * 100) + "，脂肪 " + fmtPercent(fPct * 100) + "，碳水 " + fmtPercent(cPct * 100));
 
     const rows = [
       { key: "protein", label: "蛋白质", pct: pPct * 100, grams: totals.protein },
@@ -976,6 +995,7 @@
   function dayColumnMarkup(day) {
     const weekday = WEEKDAY_LONG[(day.date.getDay() + 6) % 7];
     const isToday = day.dateKey === todayKey();
+    const isOverview = day.dateKey === viewDate;
     const statusId = getStatus(day.status ? day.status.id : getDefaultStatusId()).id;
     const entries = day.entries;
     const entriesMarkup = entries.map(function (entry) {
@@ -990,9 +1010,9 @@
     const balance = day.balance !== null ? fmtSigned(day.balance) : "—";
     const balanceClass = day.balance === null ? "" : day.balance <= 0 ? "is-deficit" : "is-surplus";
 
-    return '<section class="day-column' + (isToday ? " is-today" : "") + '" data-day-column="' + day.dateKey + '" style="--status-color:' + escapeHtml(day.status.color) + ';--day-tint:' + hexToRgba(day.status.color, 0.15) + ';">' +
+    return '<section class="day-column' + (isToday ? " is-today" : "") + (isOverview ? " is-overview" : "") + '" data-day-column="' + day.dateKey + '" style="--status-color:' + escapeHtml(day.status.color) + ';--day-tint:' + hexToRgba(day.status.color, 0.15) + ';">' +
       '<header class="day-head">' +
-        '<div class="day-title"><span>' + weekday + '</span><strong>' + day.date.getDate() + '</strong></div>' +
+        '<button type="button" class="day-title" data-select-day="' + day.dateKey + '" title="查看当日概览"><span>' + weekday + '</span><strong>' + day.date.getDate() + '</strong></button>' +
         '<div class="day-status-row">' +
           '<label class="day-status-wrap">' +
             '<select class="day-status" data-day-status="' + day.dateKey + '" aria-label="' + weekday + '状态">' +
@@ -1153,7 +1173,7 @@
     renderCompare();
   }
 
-  function clearWeekStatuses() {
+  async function clearWeekStatuses() {
     const days = getWeekSummaries(parseDateKey(viewDate));
     const defaultId = getDefaultStatusId();
     const hasCustom = days.some(function (day) { return day.day && day.status && day.status.id !== defaultId; });
@@ -1161,7 +1181,11 @@
       showToast("本周没有可清除的状态");
       return;
     }
-    if (!window.confirm("把本周所有日期恢复为默认状态？")) return;
+    const confirmed = await askConfirm("把本周所有日期恢复为默认状态？", {
+      title: "清除本周状态",
+      confirmText: "清除",
+    });
+    if (!confirmed) return;
     days.forEach(function (day) {
       const userDay = activeUser().days[day.dateKey];
       if (userDay) userDay.statusId = defaultId;
@@ -1171,7 +1195,13 @@
     showToast("已清除本周状态");
   }
 
-  function handleDayClick(event) {
+  async function handleDayClick(event) {
+    const selectDay = event.target.closest("[data-select-day]");
+    if (selectDay) {
+      setWeekDate(selectDay.dataset.selectDay);
+      return;
+    }
+
     const clearStatus = event.target.closest("[data-day-status-clear]");
     if (clearStatus) {
       const day = activeUser().days[clearStatus.dataset.dayStatusClear];
@@ -1188,13 +1218,22 @@
     const decButton = event.target.closest("[data-entry-dec]");
     const card = event.target.closest("[data-entry-card]");
     if (card) {
-      const entry = findEntry(card.dataset.date, card.dataset.entryCard);
+      const dateKey = card.dataset.date;
+      const entryId = card.dataset.entryCard;
+      const entry = findEntry(dateKey, entryId);
       if (!entry) return;
       if (deleteButton) {
-        if (!window.confirm("从这一天移除「" + entry.name + "」？")) return;
-        const day = activeUser().days[card.dataset.date];
-        day.entries = day.entries.filter(function (item) { return item.id !== entry.id; });
-        if (!day.entries.length && getStatus(day.statusId).id === getDefaultStatusId()) delete activeUser().days[card.dataset.date];
+        const confirmed = await askConfirm("从这一天移除「" + entry.name + "」？", {
+          title: "移除食物",
+          confirmText: "移除",
+        });
+        if (!confirmed) return;
+        const current = findEntry(dateKey, entryId);
+        if (!current) return;
+        const day = activeUser().days[dateKey];
+        if (!day) return;
+        day.entries = day.entries.filter(function (item) { return item.id !== entryId; });
+        if (!day.entries.length && getStatus(day.statusId).id === getDefaultStatusId()) delete activeUser().days[dateKey];
         saveState();
         renderAll();
         showToast("已移除「" + entry.name + "」");
@@ -1229,7 +1268,7 @@
      Tray interactions
      ========================================================= */
 
-  function handleTrayClick(event) {
+  async function handleTrayClick(event) {
     const addEmpty = event.target.closest("[data-tray-add]");
     if (addEmpty) {
       openFoodDialog();
@@ -1249,7 +1288,12 @@
       return;
     }
     if (remove) {
-      if (!window.confirm("删除托盘中的「" + card.name + "」？已经放入日期的记录不会删除。")) return;
+      const confirmed = await askConfirm("删除托盘中的「" + card.name + "」？已经放入日期的记录不会删除。", {
+        title: "删除食物卡片",
+      });
+      if (!confirmed) return;
+      const current = findTrayCard(card.id);
+      if (!current) return;
       const user = activeUser();
       user.tray = user.tray.filter(function (item) { return item.id !== card.id; });
       saveState();
@@ -1722,18 +1766,25 @@
     showToast("已记录身体数据");
   }
 
-  function handleWeightListClick(event) {
+  async function handleWeightListClick(event) {
     const button = event.target.closest("[data-weight-delete]");
     if (!button) return;
+    const recordId = button.dataset.weightDelete;
     const user = activeUser();
-    const record = user.weightRecords.find(function (item) { return item.id === button.dataset.weightDelete; });
+    const record = user.weightRecords.find(function (item) { return item.id === recordId; });
     if (!record) return;
-    if (!window.confirm("删除 " + formatWeightDate(record) + " 的身体记录？")) return;
-    user.weightRecords = user.weightRecords.filter(function (item) { return item.id !== record.id; });
-    if (record.bodyFat !== null && record.bodyFat !== undefined) {
-      const latestFat = latestBodyFatRecord(user.weightRecords);
-      user.profile.bodyFat = latestFat ? String(latestFat.bodyFat) : "";
-      el.bodyFatInput.value = user.profile.bodyFat;
+    const confirmed = await askConfirm("删除 " + formatWeightDate(record) + " 的身体记录？", {
+      title: "删除身体记录",
+    });
+    if (!confirmed) return;
+    const currentUser = activeUser();
+    const currentRecord = currentUser.weightRecords.find(function (item) { return item.id === recordId; });
+    if (!currentRecord) return;
+    currentUser.weightRecords = currentUser.weightRecords.filter(function (item) { return item.id !== recordId; });
+    if (currentRecord.bodyFat !== null && currentRecord.bodyFat !== undefined) {
+      const latestFat = latestBodyFatRecord(currentUser.weightRecords);
+      currentUser.profile.bodyFat = latestFat ? String(latestFat.bodyFat) : "";
+      el.bodyFatInput.value = currentUser.profile.bodyFat;
     }
     saveState();
     renderWeightSection();
@@ -1850,7 +1901,7 @@
     showToast("状态已保存");
   }
 
-  function handleStatusListClick(event) {
+  async function handleStatusListClick(event) {
     const edit = event.target.closest("[data-status-edit]");
     const remove = event.target.closest("[data-status-delete]");
     if (edit) {
@@ -1858,20 +1909,26 @@
       return;
     }
     if (!remove) return;
+    const statusId = remove.dataset.statusDelete;
     const statuses = getAllStatuses();
-    const status = statuses.find(function (item) { return item.id === remove.dataset.statusDelete; });
+    const status = statuses.find(function (item) { return item.id === statusId; });
     if (!status) return;
     if (statuses.length <= 1) {
       showToast("至少保留一个状态");
       return;
     }
-    if (!window.confirm("删除状态「" + status.name + "」？使用它的日期会恢复为默认状态。")) return;
+    const confirmed = await askConfirm("删除状态「" + status.name + "」？使用它的日期会恢复为默认状态。", {
+      title: "删除状态",
+    });
+    if (!confirmed) return;
 
-    if (status.custom) {
-      state.customStatuses = state.customStatuses.filter(function (item) { return item.id !== status.id; });
+    const currentStatus = getAllStatuses().find(function (item) { return item.id === statusId; });
+    if (!currentStatus) return;
+    if (currentStatus.custom) {
+      state.customStatuses = state.customStatuses.filter(function (item) { return item.id !== statusId; });
     } else {
       state.removedBuiltinStatusIds = state.removedBuiltinStatusIds || [];
-      if (state.removedBuiltinStatusIds.indexOf(status.id) === -1) state.removedBuiltinStatusIds.push(status.id);
+      if (state.removedBuiltinStatusIds.indexOf(statusId) === -1) state.removedBuiltinStatusIds.push(statusId);
     }
 
     const remainingIds = new Set(getAllStatuses().map(function (item) { return item.id; }));
@@ -1879,10 +1936,10 @@
     state.users.forEach(function (user) {
       Object.keys(user.days).forEach(function (dateKey) {
         const userDay = user.days[dateKey];
-        if (userDay.statusId === status.id || !remainingIds.has(userDay.statusId)) userDay.statusId = defaultId;
+        if (userDay.statusId === statusId || !remainingIds.has(userDay.statusId)) userDay.statusId = defaultId;
       });
     });
-    if (ui.statusEditingId === status.id) hideStatusForm();
+    if (ui.statusEditingId === statusId) hideStatusForm();
     saveState();
     renderStatusSection();
     renderTable();
@@ -2160,12 +2217,18 @@
     showToast(ui.editingTrayId ? "卡片已保存" : "已放入托盘");
   }
 
-  function deleteEditingCard() {
+  async function deleteEditingCard() {
     if (!ui.editingTrayId) return;
-    const card = findTrayCard(ui.editingTrayId);
+    const cardId = ui.editingTrayId;
+    const card = findTrayCard(cardId);
     if (!card) return;
-    if (!window.confirm("删除托盘中的「" + card.name + "」？已经放入日期的记录不会删除。")) return;
-    activeUser().tray = activeUser().tray.filter(function (item) { return item.id !== card.id; });
+    const confirmed = await askConfirm("删除托盘中的「" + card.name + "」？已经放入日期的记录不会删除。", {
+      title: "删除食物卡片",
+    });
+    if (!confirmed) return;
+    const current = findTrayCard(cardId);
+    if (!current) return;
+    activeUser().tray = activeUser().tray.filter(function (item) { return item.id !== cardId; });
     saveState();
     closeFoodDialog();
     renderTray();
@@ -2186,8 +2249,38 @@
     }).join("");
   }
 
+  function askConfirm(message, options) {
+    const opts = options || {};
+    if (confirmResolver) {
+      const previous = confirmResolver;
+      confirmResolver = null;
+      previous(false);
+    }
+    return new Promise(function (resolve) {
+      confirmResolver = resolve;
+      el.confirmTitle.textContent = opts.title || "确认删除";
+      el.confirmMessage.textContent = message;
+      el.confirmOk.textContent = opts.confirmText || "删除";
+      if (!el.confirmDialog.open) el.confirmDialog.showModal();
+      syncBodyDialogState();
+      window.setTimeout(function () { el.confirmCancel.focus(); }, 30);
+    });
+  }
+
+  function settleConfirm(value) {
+    const resolve = confirmResolver;
+    if (!resolve) {
+      if (el.confirmDialog.open) el.confirmDialog.close();
+      return;
+    }
+    confirmResolver = null;
+    if (el.confirmDialog.open) el.confirmDialog.close();
+    resolve(value);
+    syncBodyDialogState();
+  }
+
   function syncBodyDialogState() {
-    const open = el.profileDialog.open || el.userDialog.open || el.foodDialog.open;
+    const open = el.profileDialog.open || el.userDialog.open || el.foodDialog.open || el.confirmDialog.open;
     document.body.classList.toggle("dialog-open", open);
   }
 
