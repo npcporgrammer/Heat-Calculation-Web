@@ -1379,6 +1379,22 @@ svg {
   color: #66723e;
 }
 
+.day-target.fat.is-warning .day-target-track i {
+  background: var(--orange);
+}
+
+.day-target.fat.is-warning .day-target-head strong {
+  color: var(--orange-deep);
+}
+
+.day-target.fat.is-over .day-target-track i {
+  background: var(--danger);
+}
+
+.day-target.fat.is-over .day-target-head strong {
+  color: var(--danger);
+}
+
 .day-target.is-unset .day-target-track {
   opacity: 0.45;
 }

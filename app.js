@@ -612,8 +612,12 @@
   function dayTargetMarkup(key, label, actual, target) {
     const unset = !Number.isFinite(target) || target <= 0;
     const pct = unset ? 0 : clamp((actual / target) * 100, 0, 100);
+    const excess = unset ? 0 : (actual / target - 1) * 100;
     const met = !unset && actual >= target - 0.05;
-    return '<div class="day-target ' + key + (met ? " is-met" : "") + (unset ? " is-unset" : "") + '">' +
+    const warning = key === "fat" && excess > 5 && excess <= 10;
+    const over = key === "fat" && excess > 10;
+    const excessTitle = warning || over ? ' title="超出每日最低脂肪 ' + fmtDecimal(excess) + '%"' : "";
+    return '<div class="day-target ' + key + (met ? " is-met" : "") + (warning ? " is-warning" : "") + (over ? " is-over" : "") + (unset ? " is-unset" : "") + '"' + excessTitle + '>' +
       '<div class="day-target-head"><span>' + label + '</span><strong>' +
         (unset ? "未设" : fmtDecimal(actual) + " / " + fmtQty(target) + "g" + (met ? " ✓" : "")) +
       '</strong></div>' +
